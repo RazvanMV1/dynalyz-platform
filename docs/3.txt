@@ -1,0 +1,850 @@
+Continuare Model de Bază de Date Extensibil
+Copy# backend/app/models/subscription.py (continuare)
+class Payment(Base):
+    subscription_id = Column(UUID(as_uuid=True), ForeignKey("subscription.id"), nullable=False)
+    amount = Column(Float, nullable=False)
+    currency = Column(String, default="USD")
+    payment_date = Column(DateTime(timezone=True), nullable=False)
+    payment_method = Column(String)  # credit_card, paypal, etc.
+    transaction_id = Column(String)
+    status = Column(Enum(PaymentStatus), default=PaymentStatus.PENDING)
+    details = Column(JSONB)
+    
+    # Relații
+    subscription = relationship("Subscription", back_populates="payments")
+
+# backend/app/models/notification.py
+from sqlalchemy import Column, String, ForeignKey, Boolean, Enum, Text
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship
+import enum
+from .base import Base
+
+class NotificationType(str, enum.Enum):
+    SIGNAL = "signal"
+    SYSTEM = "system"
+    SUBSCRIPTION = "subscription"
+    ALERT = "alert"
+
+class NotificationChannel(str, enum.Enum):
+    EMAIL = "email"
+    PUSH = "push"
+    SMS = "sms"
+    TELEGRAM = "telegram"
+    DISCORD = "discord"
+    WEBHOOK = "webhook"
+
+class Notification(Base):
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"))
+    type = Column(Enum(NotificationType), nullable=False)
+    title = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    is_read = Column(Boolean, default=False)
+    metadata = Column(JSONB)  # Signal ID, etc.
+    
+    # Relații
+    user = relationship("User")
+    delivery_attempts = relationship("NotificationDelivery", back_populates="notification")
+
+class NotificationDelivery(Base):
+    notification_id = Column(UUID(as_uuid=True), ForeignKey("notification.id"), nullable=False)
+    channel = Column(Enum(NotificationChannel), nullable=False)
+    status = Column(String)  # sent, failed, pending
+    sent_at = Column(DateTime(timezone=True))
+    error_message = Column(String)
+    delivery_data = Column(JSONB)  # Response from delivery service
+    
+    # Relații
+    notification = relationship("Notification", back_populates="delivery_attempts")
+4.3 Schema pentru migrații cu Alembic
+Copy# backend/alembic/env.py
+from logging.config import fileConfig
+from sqlalchemy import engine_from_config
+from sqlalchemy import pool
+from alembic import context
+
+# Importăm modelele pentru a le include în migrații
+from app.models import Base
+from app.core.config import settings
+
+# this is the Alembic Config object
+config = context.config
+
+# Interpretare config din app settings
+db_url = f"{settings.DB_ENGINE}://{settings.DB_USERNAME}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+config.set_main_option("sqlalchemy.url", db_url)
+
+# Interpret the config file for logging
+fileConfig(config.config_file_name)
+
+# add your model's MetaData object here for 'autogenerate' support
+target_metadata = Base.metadata
+
+def run_migrations_offline():
+    """Run migrations in 'offline' mode."""
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+def run_migrations_online():
+    """Run migrations in 'online' mode."""
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+4.4 Repository Pattern pentru accesul la date
+Copy# backend/app/db/repositories/base.py
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
+from uuid import UUID
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from app.models.base import Base
+
+ModelType = TypeVar("ModelType", bound=Base)
+CreateSchemaType = TypeVar("CreateSchemaType", bound=BaseModel)
+UpdateSchemaType = TypeVar("UpdateSchemaType", bound=BaseModel)
+
+class BaseRepository(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
+    def __init__(self, model: Type[ModelType], db: Session):
+        self.model = model
+        self.db = db
+
+    def get(self, id: UUID) -> Optional[ModelType]:
+        return self.db.query(self.model).filter(self.model.id == id).first()
+
+    def get_multi(
+        self, *, skip: int = 0, limit: int = 100, **filters
+    ) -> List[ModelType]:
+        query = self.db.query(self.model)
+        for field, value in filters.items():
+            if hasattr(self.model, field):
+                query = query.filter(getattr(self.model, field) == value)
+        return query.offset(skip).limit(limit).all()
+
+    def create(self, *, obj_in: CreateSchemaType) -> ModelType:
+        obj_in_data = jsonable_encoder(obj_in)
+        db_obj = self.model(**obj_in_data)
+        self.db.add(db_obj)
+        self.db.commit()
+        self.db.refresh(db_obj)
+        return db_obj
+
+    def update(
+        self,
+        *,
+        db_obj: ModelType,
+        obj_in: Union[UpdateSchemaType, Dict[str, Any]]
+    ) -> ModelType:
+        obj_data = jsonable_encoder(db_obj)
+        if isinstance(obj_in, dict):
+            update_data = obj_in
+        else:
+            update_data = obj_in.dict(exclude_unset=True)
+        for field in obj_data:
+            if field in update_data:
+                setattr(db_obj, field, update_data[field])
+        self.db.add(db_obj)
+        self.db.commit()
+        self.db.refresh(db_obj)
+        return db_obj
+
+    def remove(self, *, id: UUID) -> ModelType:
+        obj = self.db.query(self.model).get(id)
+        self.db.delete(obj)
+        self.db.commit()
+        return obj
+5. Organizarea Task-urilor Periodice
+5.1 Configurare Celery pentru task-uri asincrone
+Copy# backend/app/tasks/worker.py
+from celery import Celery
+from app.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
+
+celery_app = Celery(
+    "forex_ai_tasks",
+    broker=settings.CELERY_BROKER_URL,
+    backend=settings.CELERY_RESULT_BACKEND,
+)
+
+# Configurare Celery
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+    worker_prefetch_multiplier=1,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_ignore_result=False,
+)
+
+# Încărcare task-uri
+celery_app.autodiscover_tasks(
+    ["app.tasks.market_data", "app.tasks.signal_generation", "app.tasks.notifications"]
+)
+
+@celery_app.task(bind=True)
+def debug_task(self):
+    logger.info(f"Request: {self.request!r}")
+5.2 Task-uri periodice pentru colectare date și generare semnale
+Copy# backend/app/tasks/market_data.py
+from app.tasks.worker import celery_app
+from celery.schedules import crontab
+from app.db.session import get_db
+from app.services.market_data import MarketDataService
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Configurare task-uri periodice
+celery_app.conf.beat_schedule = {
+    "fetch_daily_ohlc_data": {
+        "task": "app.tasks.market_data.fetch_daily_ohlc",
+        "schedule": crontab(minute=0, hour="*/6"),  # La fiecare 6 ore
+    },
+    "generate_signals": {
+        "task": "app.tasks.signal_generation.generate_periodic_signals",
+        "schedule": crontab(minute=15, hour="*/4"),  # La fiecare 4 ore, la 15 minute
+    },
+    "update_model_performance": {
+        "task": "app.tasks.signal_generation.update_model_performance",
+        "schedule": crontab(minute=0, hour=0),  # La miezul nopții
+    },
+    "send_daily_digest": {
+        "task": "app.tasks.notifications.send_daily_digest",
+        "schedule": crontab(minute=0, hour=8),  # La ora 8 dimineața
+    },
+}
+
+@celery_app.task
+def fetch_daily_ohlc():
+    """Fetch OHLC data for all active currency pairs and timeframes."""
+    logger.info("Starting daily OHLC data fetch")
+    
+    try:
+        # Use dependency injection with a new db session
+        db = next(get_db())
+        market_data_service = MarketDataService(db)
+        
+        # Get all active pairs and timeframes
+        pairs = market_data_service.get_active_currency_pairs()
+        timeframes = market_data_service.get_active_timeframes()
+        
+        for pair in pairs:
+            for timeframe in timeframes:
+                # Create subtask for each pair/timeframe combination
+                fetch_ohlc_for_pair_timeframe.delay(
+                    pair_id=str(pair.id),
+                    timeframe_id=str(timeframe.id)
+                )
+        
+        return {"status": "success", "message": f"OHLC fetch initiated for {len(pairs)} pairs and {len(timeframes)} timeframes"}
+    
+    except Exception as e:
+        logger.error(f"Error in fetch_daily_ohlc: {str(e)}")
+        raise
+    finally:
+        db.close()
+
+@celery_app.task
+def fetch_ohlc_for_pair_timeframe(pair_id: str, timeframe_id: str):
+    """Fetch OHLC data for a specific pair and timeframe."""
+    logger.info(f"Fetching OHLC data for pair {pair_id} with timeframe {timeframe_id}")
+    
+    try:
+        # Use dependency injection with a new db session
+        db = next(get_db())
+        market_data_service = MarketDataService(db)
+        
+        # Fetch and store OHLC data
+        result = market_data_service.fetch_and_store_ohlc(pair_id, timeframe_id)
+        
+        return {
+            "status": "success",
+            "pair_id": pair_id,
+            "timeframe_id": timeframe_id,
+            "records_imported": result.get("records_imported", 0)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in fetch_ohlc_for_pair_timeframe for pair {pair_id}, timeframe {timeframe_id}: {str(e)}")
+        raise
+    finally:
+        db.close()
+Copy# backend/app/tasks/signal_generation.py
+from app.tasks.worker import celery_app
+from app.db.session import get_db
+from app.services.signal import SignalService
+from app.services.ai_model import AIModelService
+import logging
+
+logger = logging.getLogger(__name__)
+
+@celery_app.task
+def generate_periodic_signals():
+    """Generate signals for all active pairs and timeframes using active models."""
+    logger.info("Starting periodic signal generation")
+    
+    try:
+        # Use dependency injection with a new db session
+        db = next(get_db())
+        signal_service = SignalService(db)
+        model_service = AIModelService(db)
+        
+        # Get active models
+        active_models = model_service.get_active_models()
+        
+        for model in active_models:
+            # Create subtask for each model
+            generate_signals_with_model.delay(model_id=str(model.id))
+        
+        return {"status": "success", "message": f"Signal generation initiated for {len(active_models)} models"}
+    
+    except Exception as e:
+        logger.error(f"Error in generate_periodic_signals: {str(e)}")
+        raise
+    finally:
+        db.close()
+
+@celery_app.task
+def generate_signals_with_model(model_id: str):
+    """Generate signals for all active pairs and timeframes using a specific model."""
+    logger.info(f"Generating signals with model {model_id}")
+    
+    try:
+        # Use dependency injection with a new db session
+        db = next(get_db())
+        signal_service = SignalService(db)
+        
+        # Process signals for all pairs and timeframes
+        result = signal_service.generate_signals_for_model(model_id)
+        
+        # After generating signals, create notification tasks
+        create_signal_notifications.delay(
+            signal_ids=[str(signal_id) for signal_id in result.get("new_signal_ids", [])]
+        )
+        
+        return {
+            "status": "success",
+            "model_id": model_id,
+            "signals_created": len(result.get("new_signal_ids", [])),
+            "signals_updated": len(result.get("updated_signal_ids", []))
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in generate_signals_with_model for model {model_id}: {str(e)}")
+        raise
+    finally:
+        db.close()
+
+@celery_app.task
+def update_model_performance():
+    """Update performance metrics for all active models."""
+    logger.info("Starting model performance update")
+    
+    try:
+        # Use dependency injection with a new db session
+        db = next(get_db())
+        model_service = AIModelService(db)
+        
+        # Update performance metrics for all active models
+        result = model_service.update_all_model_performance_metrics()
+        
+        return {
+            "status": "success",
+            "models_updated": result.get("models_updated", 0)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in update_model_performance: {str(e)}")
+        raise
+    finally:
+        db.close()
+5.3 Sistem de notificări asincrone
+Copy# backend/app/tasks/notifications.py
+from app.tasks.worker import celery_app
+from app.db.session import get_db
+from app.models.notification import NotificationChannel
+from app.services.notification import NotificationService
+from typing import List
+import logging
+
+logger = logging.getLogger(__name__)
+
+@celery_app.task
+def create_signal_notifications(signal_ids: List[str]):
+    """Create notifications for new signals."""
+    logger.info(f"Creating notifications for signals: {signal_ids}")
+    
+    try:
+        # Use dependency injection with a new db session
+        db = next(get_db())
+        notification_service = NotificationService(db)
+        
+        # Create notifications for each signal
+        created_notifications = []
+        for signal_id in signal_ids:
+            notifications = notification_service.create_signal_notifications(signal_id)
+            created_notifications.extend(notifications)
+        
+        # After creating notifications, deliver them via appropriate channels
+        for notification in created_notifications:
+            deliver_notification.delay(notification_id=str(notification.id))
+        
+        return {
+            "status": "success",
+            "signals_processed": len(signal_ids),
+            "notifications_created": len(created_notifications)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in create_signal_notifications: {str(e)}")
+        raise
+    finally:
+        db.close()
+
+@celery_app.task
+def deliver_notification(notification_id: str):
+    """Deliver a notification via its defined channels."""
+    logger.info(f"Delivering notification: {notification_id}")
+    
+    try:
+        # Use dependency injection with a new db session
+        db = next(get_db())
+        notification_service = NotificationService(db)
+        
+        # Get notification details
+        notification = notification_service.get_notification(notification_id)
+        if not notification:
+            logger.error(f"Notification {notification_id} not found")
+            return {
+                "status": "error",
+                "message": f"Notification {notification_id} not found"
+            }
+        
+        # Get user's preferred channels
+        user_id = notification.user_id
+        channels = notification_service.get_user_notification_channels(user_id)
+        
+        # Send via each channel
+        delivery_results = {}
+        for channel in channels:
+            try:
+                if channel == NotificationChannel.EMAIL:
+                    result = notification_service.send_email_notification(notification_id)
+                elif channel == NotificationChannel.PUSH:
+                    result = notification_service.send_push_notification(notification_id)
+                elif channel == NotificationChannel.TELEGRAM:
+                    result = notification_service.send_telegram_notification(notification_id)
+                elif channel == NotificationChannel.DISCORD:
+                    result = notification_service.send_discord_notification(notification_id)
+                elif channel == NotificationChannel.WEBHOOK:
+                    result = notification_service.send_webhook_notification(notification_id)
+                
+                delivery_results[channel.value] = "success"
+            except Exception as e:
+                logger.error(f"Error sending {channel.value} notification {notification_id}: {str(e)}")
+                delivery_results[channel.value] = f"error: {str(e)}"
+        
+        return {
+            "status": "success",
+            "notification_id": notification_id,
+            "delivery_results": delivery_results
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in deliver_notification for {notification_id}: {str(e)}")
+        raise
+    finally:
+        db.close()
+
+@celery_app.task
+def send_daily_digest():
+    """Send daily digest of signals and performance to all users."""
+    logger.info("Sending daily digest notifications")
+    
+    try:
+        # Use dependency injection with a new db session
+        db = next(get_db())
+        notification_service = NotificationService(db)
+        
+        # Get all active users eligible for daily digest
+        user_ids = notification_service.get_users_for_daily_digest()
+        
+        # Create and send digest for each user
+        for user_id in user_ids:
+            send_user_daily_digest.delay(user_id=str(user_id))
+        
+        return {
+            "status": "success",
+            "digests_scheduled": len(user_ids)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in send_daily_digest: {str(e)}")
+        raise
+    finally:
+        db.close()
+
+@celery_app.task
+def send_user_daily_digest(user_id: str):
+    """Create and send daily digest for a specific user."""
+    logger.info(f"Sending daily digest for user {user_id}")
+    
+    try:
+        # Use dependency injection with a new db session
+        db = next(get_db())
+        notification_service = NotificationService(db)
+        
+        # Create digest notification
+        notification = notification_service.create_daily_digest_notification(user_id)
+        
+        # Deliver notification
+        deliver_notification.delay(notification_id=str(notification.id))
+        
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "notification_id": str(notification.id)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in send_user_daily_digest for user {user_id}: {str(e)}")
+        raise
+    finally:
+        db.close()
+6. Sistem de Autentificare Scalabil
+6.1 Implementarea autentificării JWT cu token refresh
+Copy# backend/app/core/security.py
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional, Union
+
+from jose import jwt
+from passlib.context import CryptContext
+import uuid
+from app.core.config import settings
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def create_access_token(
+    subject: Union[str, Any], expires_delta: Optional[timedelta] = None
+) -> str:
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(
+            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+        )
+    
+    to_encode = {"exp": expire, "sub": str(subject), "type": "access"}
+    encoded_jwt = jwt.encode(
+        to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
+    )
+    return encoded_jwt
+
+def create_refresh_token(
+    subject: Union[str, Any], expires_delta: Optional[timedelta] = None
+) -> str:
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(
+            days=settings.REFRESH_TOKEN_EXPIRE_DAYS
+        )
+    
+    to_encode = {"exp": expire, "sub": str(subject), "type": "refresh", "jti": str(uuid.uuid4())}
+    encoded_jwt = jwt.encode(
+        to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
+    )
+    return encoded_jwt
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+def decode_token(token: str) -> Dict[str, Any]:
+    return jwt.decode(
+        token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+    )
+6.2 Serviciul de autentificare
+Copy# backend/app/services/auth.py
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
+from sqlalchemy.orm import Session
+from uuid import UUID
+
+from app.core.security import verify_password, create_access_token, create_refresh_token, decode_token
+from app.core.config import settings
+from app.db.session import get_db
+from app.models.user import User
+from app.schemas.auth import TokenData, TokenResponse
+from app.db.repositories.user import UserRepository
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_PREFIX}{settings.API_V1_STR}/auth/login")
+
+class AuthService:
+    def __init__(self, db: Session):
+        self.db = db
+        self.user_repo = UserRepository(db)
+
+    def authenticate_user(self, username_or_email: str, password: str) -> Optional[User]:
+        user = self.user_repo.get_by_username_or_email(username_or_email)
+        if not user:
+            return None
+        if not verify_password(password, user.hashed_password):
+            return None
+        return user
+
+    def create_tokens(self, user_id: UUID) -> TokenResponse:
+        access_token = create_access_token(user_id)
+        refresh_token = create_refresh_token(user_id)
+        
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type="bearer"
+        )
+
+    def refresh_token(self, refresh_token: str) -> TokenResponse:
+        try:
+            payload = decode_token(refresh_token)
+            
+            # Verifica daca e token de refresh
+            if payload.get("type") != "refresh":
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid refresh token",
+                )
+            
+            user_id = payload.get("sub")
+            if user_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                )
+            
+            # Verifică dacă user-ul există
+            user = self.user_repo.get(UUID(user_id))
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User not found",
+                )
+            
+            # Generează noi tokens
+            return self.create_tokens(user.id)
+            
+        except JWTError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+            )
+
+    def get_current_user(self, token: str = Depends(oauth2_scheme)) -> User:
+        try:
+            payload = decode_token(token)
+            
+            # Verifică dacă e access token
+            if payload.get("type") != "access":
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid access token",
+                )
+            
+            user_id = payload.get("sub")
+            if user_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                )
+                
+            token_data = TokenData(user_id=user_id)
+        except JWTError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+            )
+            
+        user = self.user_repo.get(UUID(token_data.user_id))
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="User not found"
+            )
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, 
+                detail="Inactive user"
+            )
+        return user
+6.3 API pentru autentificare
+Copy# backend/app/api/v1/endpoints/auth.py
+from typing import Any
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Body
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.orm import Session
+
+from app.api.dependencies import get_auth_service, get_current_user
+from app.schemas.auth import TokenResponse, RefreshTokenRequest
+from app.schemas.user import UserCreate, User, UserResponse
+from app.services.auth import AuthService
+from app.services.user import UserService
+
+router = APIRouter()
+
+@router.post("/login", response_model=TokenResponse)
+def login(
+    response: Response,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> Any:
+    """
+    OAuth2 compatible token login, get an access token for future requests
+    """
+    user = auth_service.authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+        )
+    
+    tokens = auth_service.create_tokens(user.id)
+    
+    # Set refresh token in HTTP only cookie
+    refresh_expiry = 60 * 60 * 24 * 7  # 7 days in seconds
+    response.set_cookie(
+        key="refresh_token",
+        value=tokens.refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=refresh_expiry
+    )
+    
+    return tokens
+
+@router.post("/refresh", response_model=TokenResponse)
+def refresh_token(
+    response: Response,
+    refresh_request: RefreshTokenRequest = Body(...),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> Any:
+    """
+    Use the refresh token to get a new access token
+    """
+    tokens = auth_service.refresh_token(refresh_request.refresh_token)
+    
+    # Set new refresh token in HTTP only cookie
+    refresh_expiry = 60 * 60 * 24 * 7  # 7 days in seconds
+    response.set_cookie(
+        key="refresh_token",
+        value=tokens.refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=refresh_expiry
+    )
+    
+    return tokens
+
+@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+def register(
+    response: Response,
+    user_in: UserCreate,
+    user_service: UserService = Depends(get_user_service),
+    auth_service: AuthService = Depends(get_auth_service),
+) -> Any:
+    """
+    Register a new user
+    """
+    user = user_service.create_user(user_in)
+    
+    tokens = auth_service.create_tokens(user.id)
+    
+    # Set refresh token in HTTP only cookie
+    refresh_expiry = 60 * 60 * 24 * 7  # 7 days in seconds
+    response.set_cookie(
+        key="refresh_token",
+        value=tokens.refresh_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=refresh_expiry
+    )
+    
+    return tokens
+
+@router.post("/logout")
+def logout(response: Response) -> dict:
+    """
+    Logout the current user by clearing the refresh token cookie
+    """
+    response.delete_cookie(
+        key="refresh_token",
+        httponly=True,
+        secure=True,
+        samesite="strict"
+    )
+    
+    return {"detail": "Successfully logged out"}
+
+@router.get("/me", response_model=UserResponse)
+def get_current_user_info(
+    current_user: User = Depends(get_current_user)
+) -> Any:
+    """
+    Get current user information
+    """
+    return current_user
+6.4 Sistem de permisiuni bazat pe roluri
+Copy# backend/app/api/dependencies.py
+from typing import Optional
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.services.auth import AuthService
+from app.models.user import UserRole, User
+
+def get_auth_service(db: Session = Depends(get_db)) -> AuthService:
+    return AuthService(db)
+
+def get_current_user(
+    auth_service: AuthService = Depends(get_auth_service),
+    token: str = Depends(OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login"))
+) -> User:
+    return auth_service.get_current_user(token)
+
+def get_current_active_user(
+    current_user: User =

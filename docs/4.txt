@@ -1,0 +1,862 @@
+Continuarea Arhitecturii Enterprise pentru Platforma de Semnale Forex bazată pe AI
+6. Sistem de Autentificare Scalabil (continuare)
+6.4 Sistem de permisiuni bazat pe roluri (continuare)
+Copy# backend/app/api/dependencies.py (continuare)
+def get_current_active_user(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive user",
+        )
+    return current_user
+
+def check_role(allowed_roles: list[UserRole]):
+    def check_user_role(current_user: User = Depends(get_current_active_user)) -> User:
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Operation not permitted for role {current_user.role}",
+            )
+        return current_user
+    return check_user_role
+
+# Permisiuni pe bază de rol
+def get_current_admin(
+    current_user: User = Depends(check_role([UserRole.ADMIN]))
+) -> User:
+    return current_user
+
+def get_current_manager_or_admin(
+    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER]))
+) -> User:
+    return current_user
+
+# Permisiuni combinate (rol + ownership)
+def check_signal_ownership(signal_id: str, user_id: str, db: Session):
+    """
+    Verifică dacă utilizatorul are dreptul să acceseze/modifice un semnal
+    """
+    from app.db.repositories.signal import SignalRepository
+    signal_repo = SignalRepository(db)
+    signal = signal_repo.get(signal_id)
+    
+    if not signal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Signal not found",
+        )
+    
+    # Admin/Manager pot accesa orice
+    # Utilizatorii normali pot accesa doar semnalele pe care sunt abonați
+    # Această logică poate fi adaptată în funcție de modelul de business
+    
+    return signal
+6.5 Middleware de securitate
+Copy# backend/app/api/middleware/security.py
+from fastapi import Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+from app.core.config import settings
+import time
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Security headers
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        
+        # CORS headers are managed by FastAPI's CORSMiddleware
+        
+        return response
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, redis_client=None, rate_limit=100, time_window=60):
+        super().__init__(app)
+        self.redis_client = redis_client
+        self.rate_limit = rate_limit  # cereri pe fereastră
+        self.time_window = time_window  # în secunde
+    
+    async def dispatch(self, request: Request, call_next):
+        if not self.redis_client or settings.ENVIRONMENT == "development":
+            # Skip rate limiting in dev or if Redis not available
+            return await call_next(request)
+            
+        # Identifică clientul (IP sau token)
+        client_id = request.client.host
+        if "Authorization" in request.headers:
+            # Extract token și foloseste-l ca identificator
+            auth_header = request.headers["Authorization"]
+            if auth_header.startswith("Bearer "):
+                client_id = auth_header[7:]
+        
+        # Creează cheie unică pentru client în fereastra curentă
+        current_time = int(time.time())
+        current_window = current_time - (current_time % self.time_window)
+        key = f"rate_limit:{client_id}:{current_window}"
+        
+        # Incrementează contor pentru client
+        current_count = self.redis_client.incr(key)
+        
+        # Setează TTL la prima cerere
+        if current_count == 1:
+            self.redis_client.expire(key, self.time_window)
+        
+        # Verifică limita
+        if current_count > self.rate_limit:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": "Too many requests",
+                    "retry_after": current_window + self.time_window - current_time
+                }
+            )
+        
+        # Adaugă headers pentru debugging
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(self.rate_limit)
+        response.headers["X-RateLimit-Remaining"] = str(max(0, self.rate_limit - current_count))
+        response.headers["X-RateLimit-Reset"] = str(current_window + self.time_window)
+        
+        return response
+7. Sistem de Notificări
+7.1 Interfața abstractă pentru notificări
+Copy# backend/app/services/notification_providers/base.py
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional
+
+class NotificationProvider(ABC):
+    """
+    Interfață abstract pentru providerii de notificări
+    """
+    
+    @abstractmethod
+    def send(self, recipient: str, subject: str, content: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Trimite o notificare prin provider-ul specific
+        
+        Args:
+            recipient: Destinatarul (email, chat ID, etc)
+            subject: Subiectul notificării
+            content: Conținutul notificării în format JSON
+            
+        Returns:
+            Dict cu rezultatele trimiterii
+        """
+        pass
+
+    @abstractmethod
+    def is_configured(self) -> bool:
+        """
+        Verifică dacă provider-ul este configurat și gata de utilizare
+        """
+        pass
+    
+    @abstractmethod
+    def get_provider_name(self) -> str:
+        """
+        Returnează numele provider-ului pentru logging și debug
+        """
+        pass
+7.2 Implementare provideri pentru diferite canale
+Copy# backend/app/services/notification_providers/email.py
+from typing import Dict, Any
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from .base import NotificationProvider
+from app.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
+
+class EmailProvider(NotificationProvider):
+    def __init__(self):
+        self.smtp_server = settings.SMTP_SERVER
+        self.smtp_port = settings.SMTP_PORT
+        self.smtp_user = settings.SMTP_USERNAME
+        self.smtp_pass = settings.SMTP_PASSWORD
+        self.sender_email = settings.SMTP_USERNAME
+    
+    def send(self, recipient: str, subject: str, content: Dict[str, Any]) -> Dict[str, Any]:
+        # Construiește mesaj email
+        message = MIMEMultipart("alternative")
+        message["Subject"] = subject
+        message["From"] = self.sender_email
+        message["To"] = recipient
+        
+        # Text și HTML
+        text = content.get("text", "")
+        html = content.get("html", "")
+        
+        # Atașează părți la mesaj
+        if text:
+            message.attach(MIMEText(text, "plain"))
+        if html:
+            message.attach(MIMEText(html, "html"))
+        
+        try:
+            # Trimite email
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                server.starttls()
+                server.login(self.smtp_user, self.smtp_pass)
+                server.send_message(message)
+            
+            return {
+                "success": True,
+                "provider": self.get_provider_name(),
+                "recipient": recipient,
+                "message_id": message.get("Message-ID", "")
+            }
+        except Exception as e:
+            logger.error(f"Error sending email to {recipient}: {str(e)}")
+            return {
+                "success": False,
+                "provider": self.get_provider_name(),
+                "recipient": recipient,
+                "error": str(e)
+            }
+    
+    def is_configured(self) -> bool:
+        return all([
+            self.smtp_server,
+            self.smtp_port,
+            self.smtp_user,
+            self.smtp_pass
+        ])
+    
+    def get_provider_name(self) -> str:
+        return "email"
+Copy# backend/app/services/notification_providers/telegram.py
+from typing import Dict, Any
+import requests
+from .base import NotificationProvider
+from app.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
+
+class TelegramProvider(NotificationProvider):
+    def __init__(self):
+        self.bot_token = settings.TELEGRAM_BOT_TOKEN
+        self.api_base = f"https://api.telegram.org/bot{self.bot_token}"
+    
+    def send(self, recipient: str, subject: str, content: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Trimite mesaje Telegram
+        
+        Args:
+            recipient: Chat ID Telegram
+            subject: Ignorat pentru Telegram
+            content: Dicționar cu text și opțiuni
+        """
+        message_text = content.get("text", "")
+        if not message_text:
+            message_text = subject
+        
+        # Opțiuni Telegram
+        parse_mode = content.get("parse_mode", "HTML")
+        disable_web_page_preview = content.get("disable_preview", True)
+        
+        try:
+            # Trimite mesaj
+            response = requests.post(
+                f"{self.api_base}/sendMessage",
+                json={
+                    "chat_id": recipient,
+                    "text": message_text,
+                    "parse_mode": parse_mode,
+                    "disable_web_page_preview": disable_web_page_preview
+                }
+            )
+            
+            response_data = response.json()
+            
+            if response.status_code == 200 and response_data.get("ok"):
+                return {
+                    "success": True,
+                    "provider": self.get_provider_name(),
+                    "recipient": recipient,
+                    "message_id": response_data.get("result", {}).get("message_id")
+                }
+            else:
+                error_msg = response_data.get("description", "Unknown error")
+                logger.error(f"Telegram API error: {error_msg}")
+                return {
+                    "success": False,
+                    "provider": self.get_provider_name(),
+                    "recipient": recipient,
+                    "error": error_msg
+                }
+        
+        except Exception as e:
+            logger.error(f"Error sending Telegram message to {recipient}: {str(e)}")
+            return {
+                "success": False,
+                "provider": self.get_provider_name(),
+                "recipient": recipient,
+                "error": str(e)
+            }
+    
+    def is_configured(self) -> bool:
+        return bool(self.bot_token)
+    
+    def get_provider_name(self) -> str:
+        return "telegram"
+Copy# backend/app/services/notification_providers/webhook.py
+from typing import Dict, Any
+import requests
+import hmac
+import hashlib
+import time
+import json
+from .base import NotificationProvider
+from app.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
+
+class WebhookProvider(NotificationProvider):
+    def __init__(self):
+        self.webhook_secret = settings.WEBHOOK_SECRET
+    
+    def send(self, recipient: str, subject: str, content: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Trimite notificare webhook
+        
+        Args:
+            recipient: URL webhook
+            subject: Subiect notificare
+            content: Payload webhook
+        """
+        webhook_url = recipient
+        
+        # Construiește payload-ul
+        payload = {
+            "timestamp": int(time.time()),
+            "event": content.get("event", "notification"),
+            "subject": subject,
+            "data": content
+        }
+        
+        # Generează o semnătură pentru securitate
+        payload_str = json.dumps(payload)
+        signature = ""
+        if self.webhook_secret:
+            signature = hmac.new(
+                self.webhook_secret.encode(),
+                payload_str.encode(),
+                hashlib.sha256
+            ).hexdigest()
+        
+        # Headers
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"ForexAI-Notifier/{settings.APP_VERSION}",
+            "X-Forex-Signature": signature,
+            "X-Forex-Timestamp": str(payload["timestamp"])
+        }
+        
+        try:
+            # Trimite webhook
+            response = requests.post(
+                webhook_url,
+                headers=headers,
+                data=payload_str,
+                timeout=5  # Timeout de 5 secunde
+            )
+            
+            if response.status_code in range(200, 300):
+                return {
+                    "success": True,
+                    "provider": self.get_provider_name(),
+                    "recipient": recipient,
+                    "status_code": response.status_code
+                }
+            else:
+                return {
+                    "success": False,
+                    "provider": self.get_provider_name(),
+                    "recipient": recipient,
+                    "status_code": response.status_code,
+                    "error": response.text[:200]  # Primii 200 caractere pentru debugging
+                }
+                
+        except Exception as e:
+            logger.error(f"Error sending webhook to {recipient}: {str(e)}")
+            return {
+                "success": False,
+                "provider": self.get_provider_name(),
+                "recipient": recipient,
+                "error": str(e)
+            }
+    
+    def is_configured(self) -> bool:
+        # Webhook provider nu necesită configurare specifică la nivel global
+        # Configurarea este la nivel de subscriber
+        return True
+    
+    def get_provider_name(self) -> str:
+        return "webhook"
+7.3 Serviciul central de notificări
+Copy# backend/app/services/notification.py
+from typing import Dict, Any, List, Optional
+from sqlalchemy.orm import Session
+import logging
+from uuid import UUID
+
+from app.models.notification import (
+    Notification, NotificationType, NotificationChannel, 
+    NotificationDelivery
+)
+from app.models.user import User, UserPreferences
+from app.models.signal import Signal
+from app.db.repositories.notification import NotificationRepository
+from app.db.repositories.signal import SignalRepository
+from app.db.repositories.user import UserRepository
+
+from app.services.notification_providers.base import NotificationProvider
+from app.services.notification_providers.email import EmailProvider
+from app.services.notification_providers.telegram import TelegramProvider
+from app.services.notification_providers.webhook import WebhookProvider
+
+logger = logging.getLogger(__name__)
+
+class NotificationService:
+    def __init__(self, db: Session):
+        self.db = db
+        self.notification_repo = NotificationRepository(db)
+        self.user_repo = UserRepository(db)
+        self.signal_repo = SignalRepository(db)
+        
+        # Inițializează providerii disponibili
+        self.providers: Dict[NotificationChannel, NotificationProvider] = {
+            NotificationChannel.EMAIL: EmailProvider(),
+            NotificationChannel.TELEGRAM: TelegramProvider(),
+            NotificationChannel.WEBHOOK: WebhookProvider(),
+        }
+    
+    def get_available_channels(self) -> List[NotificationChannel]:
+        """Returnează canalele de notificare disponibile și configurate"""
+        available = []
+        for channel, provider in self.providers.items():
+            if provider.is_configured():
+                available.append(channel)
+        return available
+    
+    def get_notification(self, notification_id: str) -> Optional[Notification]:
+        """Returnează o notificare după ID"""
+        return self.notification_repo.get(UUID(notification_id))
+    
+    def get_user_notification_channels(self, user_id: str) -> List[NotificationChannel]:
+        """
+        Returnează canalele de notificare activate pentru un utilizator
+        pe baza preferințelor salvate
+        """
+        user = self.user_repo.get(UUID(user_id))
+        if not user or not user.preferences:
+            return [NotificationChannel.EMAIL]  # Default
+        
+        channels = []
+        settings = user.preferences.notification_settings or {}
+        
+        for channel in NotificationChannel:
+            if settings.get(channel.value, {}).get("enabled", False):
+                # Verifică dacă provider-ul este configurat
+                if channel in self.providers and self.providers[channel].is_configured():
+                    channels.append(channel)
+        
+        return channels
+    
+    def create_signal_notifications(self, signal_id: str) -> List[Notification]:
+        """Creează notificări pentru un semnal nou"""
+        signal = self.signal_repo.get(UUID(signal_id))
+        if not signal:
+            logger.error(f"Signal {signal_id} not found")
+            return []
+        
+        # Identifică utilizatorii care ar trebui să primească notificarea
+        # În funcție de abonamente, preferințe de perechi valutare, etc.
+        users = self._get_users_for_signal_notification(signal)
+        
+        notifications = []
+        for user in users:
+            # Generează conținutul notificării
+            notification_data = self._create_signal_notification_content(signal, user)
+            
+            # Creează notificarea în DB
+            notification = self.notification_repo.create(
+                type=NotificationType.SIGNAL,
+                user_id=user.id,
+                title=notification_data["title"],
+                content=notification_data["content"],
+                metadata={"signal_id": str(signal.id)}
+            )
+            
+            notifications.append(notification)
+        
+        return notifications
+    
+    def send_email_notification(self, notification_id: str) -> Dict[str, Any]:
+        """Trimite o notificare prin email"""
+        notification = self.get_notification(notification_id)
+        if not notification or not notification.user_id:
+            return {"success": False, "error": "Notification or user not found"}
+        
+        user = self.user_repo.get(notification.user_id)
+        if not user or not user.email:
+            return {"success": False, "error": "User email not found"}
+        
+        # Generează conținut formatat pentru email
+        content = self._format_notification_for_channel(
+            notification, NotificationChannel.EMAIL
+        )
+        
+        # Trimite email
+        provider = self.providers[NotificationChannel.EMAIL]
+        result = provider.send(
+            recipient=user.email,
+            subject=notification.title,
+            content=content
+        )
+        
+        # Înregistrează încercarea de livrare
+        self._record_delivery_attempt(
+            notification.id, 
+            NotificationChannel.EMAIL,
+            result.get("success", False),
+            result
+        )
+        
+        return result
+    
+    def send_telegram_notification(self, notification_id: str) -> Dict[str, Any]:
+        """Trimite o notificare prin Telegram"""
+        notification = self.get_notification(notification_id)
+        if not notification or not notification.user_id:
+            return {"success": False, "error": "Notification or user not found"}
+        
+        user = self.user_repo.get(notification.user_id)
+        if not user or not user.preferences:
+            return {"success": False, "error": "User preferences not found"}
+        
+        # Obține chat ID din preferințele utilizatorului
+        settings = user.preferences.notification_settings or {}
+        telegram_settings = settings.get("telegram", {})
+        chat_id = telegram_settings.get("chat_id")
+        
+        if not chat_id:
+            return {"success": False, "error": "Telegram chat ID not found"}
+        
+        # Generează conținut formatat pentru Telegram
+        content = self._format_notification_for_channel(
+            notification, NotificationChannel.TELEGRAM
+        )
+        
+        # Trimite notificare Telegram
+        provider = self.providers[NotificationChannel.TELEGRAM]
+        result = provider.send(
+            recipient=chat_id,
+            subject=notification.title,
+            content=content
+        )
+        
+        # Înregistrează încercarea de livrare
+        self._record_delivery_attempt(
+            notification.id, 
+            NotificationChannel.TELEGRAM,
+            result.get("success", False),
+            result
+        )
+        
+        return result
+    
+    def send_webhook_notification(self, notification_id: str) -> Dict[str, Any]:
+        """Trimite o notificare prin webhook"""
+        notification = self.get_notification(notification_id)
+        if not notification or not notification.user_id:
+            return {"success": False, "error": "Notification or user not found"}
+        
+        user = self.user_repo.get(notification.user_id)
+        if not user or not user.preferences:
+            return {"success": False, "error": "User preferences not found"}
+        
+        # Obține webhook URL din preferințele utilizatorului
+        settings = user.preferences.notification_settings or {}
+        webhook_settings = settings.get("webhook", {})
+        webhook_url = webhook_settings.get("url")
+        
+        if not webhook_url:
+            return {"success": False, "error": "Webhook URL not found"}
+        
+        # Generează conținut pentru webhook
+        content = self._format_notification_for_channel(
+            notification, NotificationChannel.WEBHOOK
+        )
+        
+        # Trimite webhook
+        provider = self.providers[NotificationChannel.WEBHOOK]
+        result = provider.send(
+            recipient=webhook_url,
+            subject=notification.title,
+            content=content
+        )
+        
+        # Înregistrează încercarea de livrare
+        self._record_delivery_attempt(
+            notification.id, 
+            NotificationChannel.WEBHOOK,
+            result.get("success", False),
+            result
+        )
+        
+        return result
+    
+    def create_daily_digest_notification(self, user_id: str) -> Notification:
+        """Creează o notificare de tip digest zilnic"""
+        user = self.user_repo.get(UUID(user_id))
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        # Generează conținutul digest-ului
+        digest_data = self._generate_daily_digest(user)
+        
+        # Creează notificarea
+        notification = self.notification_repo.create(
+            type=NotificationType.SYSTEM,
+            user_id=user.id,
+            title=digest_data["title"],
+            content=digest_data["content"],
+            metadata={"digest_date": digest_data["date"]}
+        )
+        
+        return notification
+    
+    def get_users_for_daily_digest(self) -> List[UUID]:
+        """Returnează lista utilizatorilor care ar trebui să primească digest zilnic"""
+        # Implementare reală ar verifica preferințele utilizatorilor
+        # Aici returnăm toți utilizatorii activi pentru simplitate
+        users = self.user_repo.get_multi(is_active=True)
+        return [user.id for user in users]
+    
+    def _get_users_for_signal_notification(self, signal: Signal) -> List[User]:
+        """
+        Determină utilizatorii care ar trebui să primească notificări
+        pentru un anumit semnal
+        """
+        # Logică reală ar verifica abonamente, preferințe de perechi valutare, etc.
+        # Pentru acest exemplu, returnăm toți utilizatorii activi
+        return self.user_repo.get_multi(is_active=True)
+    
+    def _create_signal_notification_content(
+        self, signal: Signal, user: User
+    ) -> Dict[str, Any]:
+        """Generează conținutul unei notificări pentru un semnal"""
+        pair_symbol = signal.pair.symbol if signal.pair else "Unknown"
+        tf_name = signal.timeframe.name if signal.timeframe else "Unknown"
+        
+        return {
+            "title": f"New {signal.signal_type.value.upper()} signal for {pair_symbol} ({tf_name})",
+            "content": (
+                f"A new {signal.signal_type.value} signal has been generated for "
+                f"{pair_symbol} on {tf_name} timeframe.\n\n"
+                f"Entry: {signal.entry_price}\n"
+                f"Stop Loss: {signal.stop_loss}\n"
+                f"Take Profit: {signal.take_profit}\n"
+                f"Strength: {signal.strength * 100:.1f}%"
+            )
+        }
+    
+    def _format_notification_for_channel(
+        self, notification: Notification, channel: NotificationChannel
+    ) -> Dict[str, Any]:
+        """Formatează notificarea pentru un canal specific"""
+        if channel == NotificationChannel.EMAIL:
+            return {
+                "html": (
+                    f"<h2>{notification.title}</h2>\n"
+                    f"<p>{notification.content}</p>\n"
+                ),
+                "text": f"{notification.title}\n\n{notification.content}"
+            }
+        elif channel == NotificationChannel.TELEGRAM:
+            return {
+                "text": f"<b>{notification.title}</b>\n\n{notification.content}",
+                "parse_mode": "HTML"
+            }
+        elif channel == NotificationChannel.WEBHOOK:
+            return {
+                "event": notification.type.value,
+                "title": notification.title,
+                "content": notification.content,
+                "metadata": notification.metadata
+            }
+        
+        # Default
+        return {
+            "text": f"{notification.title}\n\n{notification.content}"
+        }
+    
+    def _record_delivery_attempt(
+        self, 
+        notification_id: UUID, 
+        channel: NotificationChannel, 
+        success: bool, 
+        delivery_data: Dict[str, Any]
+    ) -> NotificationDelivery:
+        """Înregistrează o încercare de livrare a notificării"""
+        status = "sent" if success else "failed"
+        error_message = delivery_data.get("error") if not success else None
+        
+        delivery = NotificationDelivery(
+            notification_id=notification_id,
+            channel=channel,
+            status=status,
+            sent_at=datetime.utcnow() if success else None,
+            error_message=error_message,
+            delivery_data=delivery_data
+        )
+        
+        self.db.add(delivery)
+        self.db.commit()
+        self.db.refresh(delivery)
+        
+        return delivery
+    
+    def _generate_daily_digest(self, user: User) -> Dict[str, Any]:
+        """Generează conținutul pentru digestul zilnic"""
+        from datetime import datetime, timedelta
+        
+        today = datetime.utcnow().date()
+        yesterday = today - timedelta(days=1)
+        
+        # Găsește semnale recente
+        signals = self.signal_repo.get_signals_for_period(
+            start_date=yesterday,
+            end_date=today
+        )
+        
+        # Procesează semnalele pentru digest
+        signals_by_pair = {}
+        for signal in signals:
+            pair = signal.pair.symbol if signal.pair else "Unknown"
+            if pair not in signals_by_pair:
+                signals_by_pair[pair] = []
+            signals_by_pair[pair].append(signal)
+        
+        # Generează conținut
+        content = f"Daily digest for {today.strftime('%Y-%m-%d')}\n\n"
+        
+        if signals_by_pair:
+            content += "Recent signals:\n\n"
+            for pair, pair_signals in signals_by_pair.items():
+                content += f"- {pair}: {len(pair_signals)} signals\n"
+        else:
+            content += "No new signals in the last 24 hours.\n"
+        
+        return {
+            "title": f"Forex AI Daily Digest - {today.strftime('%Y-%m-%d')}",
+            "content": content,
+            "date": today.isoformat()
+        }
+8. CI/CD și Deployment
+8.1 Dockerfile pentru backend
+Copy# backend/docker/Dockerfile.api
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on
+
+# Install system dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY backend/requirements.txt .
+
+# Install Python dependencies
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+# Copy application code
+COPY backend /app/
+
+# Create non-root user for security
+RUN addgroup --system app && adduser --system --group app
+RUN chown -R app:app /app
+USER app
+
+# Command to run the API server
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+8.2 Dockerfile pentru worker (task runner)
+Copy# backend/docker/Dockerfile.worker
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on
+
+# Install system dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY backend/requirements.txt .
+
+# Install Python dependencies
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+# Copy application code
+COPY backend /app/
+
+# Create non-root user for security
+RUN addgroup --system app && adduser --system --group app
+RUN chown -R app:app /app
+USER app
+
+# Command to run the Celery worker
+CMD ["celery", "-A", "app.tasks.worker.celery_app", "worker", "--loglevel=info"]
+8.3 Docker Compose pentru dezvoltare și testare
+Copy# docker-compose.yml
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./.env.development
+    depends_on:
+      - db
+      - redis
+    restart: always

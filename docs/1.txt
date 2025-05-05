@@ -1,0 +1,337 @@
+Platformă completă de semnale automate în Forex bazată pe AI
+Vă voi prezenta o structură detaliată pentru dezvoltarea platformei de semnale automate Forex bazate pe AI, conform cerințelor dumneavoastră. Voi include toate componentele solicitate: frontend, backend, baza de date, automatizări, structura de fișiere și un roadmap de dezvoltare.
+
+1. Arhitectura generală a sistemului
+Platforma va avea următoarele componente principale:
+
+Frontend: React.js cu Tailwind CSS pentru interfața utilizator
+Backend: Python cu FastAPI pentru procesare, analiză și API REST
+Bază de date: SQL pentru stocarea datelor
+Automatizări: Cron jobs și webhook-uri pentru rularea modelelor și notificări
+Vom detalia fiecare componentă în parte.
+
+2. Frontend (React.js + Tailwind CSS)
+2.1 Funcționalități principale
+Dashboard principal cu semnale recente
+Grafice TradingView integrate
+Filtrare semnale după paritate, timeframe, performanță
+Sistem de autentificare și profil utilizator
+Notificări în timp real
+Istoric semnale și performanță
+2.2 Componente UI
+Navbar: Meniu principal, profil, setări
+Dashboard: Vizualizare centrală cu widgeturi pentru semnale
+TradingView Chart: Componenta de grafic integrată
+Signals Table: Tabel cu semnalele generate
+Filters: Filtrare după multiple criterii
+User Profile: Setări profil utilizator
+Auth Forms: Formulare pentru login/register
+Notifications: Sistem de notificări
+2.3 State Management
+Redux pentru managementul stării aplicației
+React Query pentru fetch-ul și caching-ul datelor de la API
+3. Backend (Python + FastAPI)
+3.1 Componente principale
+API Service: Endpoint-uri REST pentru comunicarea cu frontend-ul
+Data Processing Service: Procesare date OHLC
+AI Model Service: Generare și evaluare semnale
+Authentication Service: Autentificare și autorizare
+Notification Service: Trimitere notificări
+3.2 Procesare date și modele AI
+Data Collection: Citire date din CSV sau API extern
+Data Processing: Pregătirea datelor pentru modelul AI
+Feature Engineering: Generare indicatori tehnici (RSI, MACD, etc.)
+AI Model Training: Antrenare modele (RandomForest, LSTM)
+Signal Generation: Generare semnale bazate pe predicții
+Signal Evaluation: Evaluare performanță semnale
+4. Bază de date (SQL)
+4.1 Structura tabelelor
+Copy-- Tabela utilizatori
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_login TIMESTAMP WITH TIME ZONE
+);
+
+-- Tabela perechi valutare
+CREATE TABLE currency_pairs (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(20) UNIQUE NOT NULL,
+    description VARCHAR(100),
+    is_active BOOLEAN DEFAULT true
+);
+
+-- Tabela timeframes
+CREATE TABLE timeframes (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(10) UNIQUE NOT NULL,  -- 1m, 5m, 15m, 1h, 4h, 1d, etc.
+    minutes INTEGER NOT NULL  -- Conversia în minute pentru calcule
+);
+
+-- Tabela pentru date OHLC
+CREATE TABLE ohlc_data (
+    id SERIAL PRIMARY KEY,
+    pair_id INTEGER REFERENCES currency_pairs(id),
+    timeframe_id INTEGER REFERENCES timeframes(id),
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+    open DECIMAL(18, 8) NOT NULL,
+    high DECIMAL(18, 8) NOT NULL,
+    low DECIMAL(18, 8) NOT NULL,
+    close DECIMAL(18, 8) NOT NULL,
+    volume DECIMAL(18, 2),
+    UNIQUE(pair_id, timeframe_id, timestamp)
+);
+
+-- Tabela pentru semnale generate
+CREATE TABLE signals (
+    id SERIAL PRIMARY KEY,
+    pair_id INTEGER REFERENCES currency_pairs(id),
+    timeframe_id INTEGER REFERENCES timeframes(id),
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    signal_type VARCHAR(10) NOT NULL,  -- BUY, SELL
+    confidence DECIMAL(5, 2) NOT NULL,  -- 0-100%
+    entry_price DECIMAL(18, 8),
+    stop_loss DECIMAL(18, 8),
+    take_profit DECIMAL(18, 8),
+    model_id INTEGER REFERENCES ai_models(id),
+    status VARCHAR(20) DEFAULT 'open',  -- open, closed, invalidated
+    close_timestamp TIMESTAMP WITH TIME ZONE,
+    profit_loss DECIMAL(10, 2),
+    notes TEXT
+);
+
+-- Tabela pentru modele AI
+CREATE TABLE ai_models (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL,
+    type VARCHAR(50) NOT NULL,  -- RandomForest, LSTM, etc.
+    version VARCHAR(20) NOT NULL,
+    parameters JSONB,
+    accuracy DECIMAL(5, 2),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT true
+);
+
+-- Tabela pentru notificări
+CREATE TABLE notifications (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    signal_id INTEGER REFERENCES signals(id),
+    message TEXT NOT NULL,
+    is_read BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabela pentru preferințele utilizatorilor
+CREATE TABLE user_preferences (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id),
+    preferred_pairs JSONB,  -- Liste de pair_id
+    preferred_timeframes JSONB,  -- Liste de timeframe_id
+    notification_settings JSONB,  -- Setări notificări
+    ui_settings JSONB  -- Setări interfață
+);
+5. Automatizări
+5.1 Cron Jobs
+Descărcarea datelor OHLC: Programat să ruleze la intervale regulate (ex: la fiecare oră)
+
+Copy# În crontab
+0 * * * * python /path/to/backend/scripts/fetch_ohlc_data.py
+Generarea semnalelor: Rulează modelul AI pentru a genera semnale noi
+
+Copy# În crontab
+5,35 * * * * python /path/to/backend/scripts/generate_signals.py
+Evaluarea semnalelor: Verificarea semnalelor anterioare și actualizarea statusului
+
+Copy# În crontab
+10 * * * * python /path/to/backend/scripts/evaluate_signals.py
+5.2 Webhook-uri
+Endpoint pentru primirea datelor în timp real de la surse externe
+Procesare asincronă a datelor primite și actualizarea modelelor
+5.3 Sistem de notificări
+Email Notifications: Trimitere email-uri cu semnale importante
+Push Notifications: Notificări push în browser
+Webhook Integration: Integrare cu platforme terțe (Discord, Telegram)
+6. Structura fișierelor și folderelor
+forex-ai-platform/
+│
+├── frontend/                      # Codul pentru interfața utilizator
+│   ├── public/                    # Fișiere publice
+│   ├── src/
+│   │   ├── assets/                # Imagini, fonturi, etc.
+│   │   ├── components/            # Componente reutilizabile
+│   │   │   ├── common/            # Butoane, inputs, etc.
+│   │   │   ├── charts/            # Componente pentru grafice
+│   │   │   ├── signals/           # Componente pentru semnale
+│   │   │   └── auth/              # Componente pentru autentificare
+│   │   ├── pages/                 # Pagini principale
+│   │   │   ├── Dashboard.jsx
+│   │   │   ├── SignalDetails.jsx
+│   │   │   ├── Profile.jsx
+│   │   │   └── Auth.jsx
+│   │   ├── hooks/                 # Custom hooks
+│   │   ├── services/              # Servicii API, autentificare
+│   │   ├── store/                 # Redux store
+│   │   ├── utils/                 # Funcții utilitate
+│   │   ├── App.jsx                # Componenta principală
+│   │   └── index.jsx              # Punctul de intrare
+│   ├── package.json
+│   ├── tailwind.config.js
+│   └── README.md
+│
+├── backend/                       # Codul pentru server și API
+│   ├── app/
+│   │   ├── api/                   # Endpoint-uri API
+│   │   │   ├── routes/
+│   │   │   │   ├── auth.py
+│   │   │   │   ├── signals.py
+│   │   │   │   ├── users.py
+│   │   │   │   └── webhooks.py
+│   │   │   └── dependencies.py
+│   │   ├── core/                  # Configurare, setări
+│   │   │   ├── config.py
+│   │   │   ├── security.py
+│   │   │   └── database.py
+│   │   ├── models/                # Modele de date SQLAlchemy
+│   │   │   ├── user.py
+│   │   │   ├── signal.py
+│   │   │   ├── ohlc.py
+│   │   │   └── ai_model.py
+│   │   ├── schemas/               # Scheme Pydantic
+│   │   │   ├── user.py
+│   │   │   ├── signal.py
+│   │   │   └── common.py
+│   │   ├── services/              # Logica de business
+│   │   │   ├── auth.py
+│   │   │   ├── signals.py
+│   │   │   └── notifications.py
+│   │   ├── ai/                    # Module AI
+│   │   │   ├── models/            # Implementări modele AI
+│   │   │   │   ├── random_forest.py
+│   │   │   │   ├── lstm.py
+│   │   │   │   └── base.py
+│   │   │   ├── features/          # Feature engineering
+│   │   │   │   ├── indicators.py
+│   │   │   │   └── preprocessor.py
+│   │   │   ├── evaluation/        # Evaluare modele
+│   │   │   │   ├── metrics.py
+│   │   │   │   └── backtesting.py
+│   │   │   └── utils.py
+│   │   └── main.py                # Punctul de intrare FastAPI
+│   ├── scripts/                   # Scripturi pentru automatizări
+│   │   ├── fetch_ohlc_data.py
+│   │   ├── generate_signals.py
+│   │   ├── evaluate_signals.py
+│   │   └── send_notifications.py
+│   ├── tests/                     # Teste unitare și de integrare
+│   ├── alembic/                   # Migrații bază de date
+│   ├── requirements.txt
+│   └── README.md
+│
+├── docker/                        # Fișiere Docker pentru deployment
+│   ├── frontend.Dockerfile
+│   ├── backend.Dockerfile
+│   └── docker-compose.yml
+│
+├── .github/                       # GitHub CI/CD workflows
+│
+└── README.md                      # Documentația generală a proiectului
+7. Roadmap de dezvoltare (săptămânal)
+Săptămâna 1 - Pregătire și MVP Backend
+Zi 1-2: Setup proiect, Git repo, structura de bază a folderelor
+Zi 3-5: Implementare minimală a backend-ului FastAPI
+Conectare bază de date
+Modele de bază (users, pairs, timeframes, signals)
+Endpoint basic pentru date OHLC
+Zi 6-7: Implementare script de bază pentru colectare date OHLC din CSV/API extern
+Săptămâna 2 - Modele AI de bază și endpoint-uri
+Zi 1-3: Implementare model AI de bază (RandomForest)
+Feature engineering (indicatori tehnici)
+Antrenare model și evaluare
+Zi 4-5: Implementare endpoint-uri API pentru semnale
+Zi 6-7: Implementare script de generare semnale și automatizare cron
+Săptămâna 3 - Frontend MVP
+Zi 1-2: Setup proiect React cu Tailwind
+Zi 3-5: Implementare componente UI de bază
+Layout principal
+Tabel semnale
+Filtre simple
+Zi 6-7: Integrare cu backend-ul prin API
+Săptămâna 4 - Chart integration și autentificare
+Zi 1-3: Integrare TradingView în frontend
+Zi 4-5: Implementare autentificare backend (JWT)
+Zi 6-7: Implementare formulare autentificare frontend
+Săptămâna 5 - Îmbunătățire model AI și evaluare
+Zi 1-3: Implementare model LSTM și comparare cu RandomForest
+Zi 4-5: Sistem de evaluare a performanței semnalelor
+Zi 6-7: Dashboard pentru vizualizarea performanței modelelor
+Săptămâna 6 - Notificări și preferințe utilizator
+Zi 1-3: Implementare sistem de notificări (email, push)
+Zi 4-5: Implementare preferințe utilizator (perechi preferate, timeframes, etc.)
+Zi 6-7: Integrare preferințe cu generarea semnalelor
+Săptămâna 7 - Testing și optimizări
+Zi 1-3: Scriere teste unitare și de integrare
+Zi 4-5: Optimizare performanță backend și frontend
+Zi 6-7: Debugging și rezolvare probleme
+Săptămâna 8 - Deployment și documentație
+Zi 1-3: Setup Docker și Docker Compose
+Zi 4-5: Implementare CI/CD cu GitHub Actions
+Zi 6-7: Documentație pentru utilizatori și dezvoltatori
+8. Considerații tehnice suplimentare
+8.1 Tehnologii recomandate
+Frontend:
+
+React 18+
+Tailwind CSS
+Redux Toolkit sau React Query
+TradingView Lightweight Charts sau TradingView Widget
+WebSockets pentru actualizări în timp real
+JWT pentru autentificare
+Backend:
+
+Python 3.9+
+FastAPI
+SQLAlchemy ORM
+Alembic pentru migrații
+Pydantic pentru validare date
+Scikit-learn, TensorFlow/Keras sau PyTorch pentru ML
+TA-Lib pentru indicatori tehnici
+Pandas pentru manipulare date
+JWT pentru autentificare
+Celery pentru task-uri asincrone (opțional)
+Bază de date:
+
+PostgreSQL (recomandată pentru complexitate și suport JSONB)
+SQLite (pentru dezvoltare locală și testare)
+Deployment:
+
+Docker și Docker Compose
+GitHub Actions pentru CI/CD
+Nginx ca reverse proxy
+AWS/GCP/Azure sau VPS pentru hosting
+8.2 Securitate
+Autentificare JWT cu refresh tokens
+Rate limiting pentru API
+Validare și sanitizare date de intrare
+CORS configurat corect
+HTTPS pentru toate conexiunile
+Hashing parole cu bcrypt
+8.3 Scalabilitate
+Separare frontend/backend pentru scalare independentă
+Cache pentru date frecvent accesate
+Procesare asincronă pentru task-uri intensive
+Indexare corectă a bazei de date
+Monitorizare performanță
+9. Extinderi viitoare posibile
+Sistem de abonament: Implementare nivele de acces și plăți
+Social Trading: Partajare strategii și urmărire traderi
+Backtesting avansat: Testare strategii pe date istorice
+Integrare cu brokeri: Executare automată a tranzacțiilor
+Aplicație mobilă: Versiune pentru iOS și Android
+Analiza sentimentului: Integrare cu știri și social media
+Multiple modele AI: Ensemble de modele pentru predicții mai bune
+Această structură detaliată vă oferă un plan complet pentru dezvoltarea platformei de semnale automate Forex bazată pe AI. Puteți începe cu MVP-ul și extinde treptat funcționalitățile conform roadmap-ului propus.

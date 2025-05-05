@@ -1,0 +1,713 @@
+Arhitectură Enterprise pentru Platformă de Semnale Forex bazată pe AI
+1. Arhitectură Logică și Modulară
+Voi propune o arhitectură robustă, scalabilă și modulară, organizată în componente logice bine definite pentru platforma dvs. de semnale Forex.
+
+1.1 Structura de nivel înalt
+Platforma Forex AI
+├── Client Layer (Frontend)
+├── Gateway Layer
+├── Service Layer (Backend)
+├── Data Processing Layer
+├── AI/ML Layer
+├── Storage Layer
+├── Notification Layer
+└── Monitoring & Logging Layer
+1.2 Detalierea componentelor
+1.2.1 Client Layer (Frontend)
+Single Page Application (SPA): Interfață React pentru utilizatori
+Admin Dashboard: Panou de administrare separat
+API SDK/Client: Librărie pentru integrări terțe
+Mobile Views: Versiuni optimizate pentru mobil
+1.2.2 Gateway Layer
+API Gateway: Gestionează rutarea, rate limiting, autentificare
+WebSocket Gateway: Pentru actualizări în timp real
+Authentication Service: Gestionarea sessiunilor și tokenurilor
+1.2.3 Service Layer (Backend)
+User Service: Gestiune utilizatori, profiluri, preferințe
+Signal Service: Generare și livrare semnale
+Market Data Service: Colectare și normalizare date OHLC
+Subscription Service: Gestionare abonamente și plăți
+Analytics Service: Statistici și rapoarte
+1.2.4 Data Processing Layer
+Data Ingestion: Import date din surse externe
+Data Transformation: Normalizare și pregătire date
+Feature Engineering: Derivare indicatori și features
+Task Orchestration: Coordonare fluxuri de lucru asincrone
+1.2.5 AI/ML Layer
+Model Registry: Versionare și tracking modele
+Training Service: Antrenare și validare modele
+Inference Service: Predicție și generare semnale
+Evaluation Service: Evaluare performanță modele
+1.2.6 Storage Layer
+SQL Database: Date structurate (utilizatori, semnale)
+Time Series Database: Date istorice OHLC optimizate
+Object Storage: Modele, artefacte, fișiere mari
+Cache Layer: Redis pentru caching și sesiuni
+1.2.7 Notification Layer
+Notification Hub: Centralizare și rutare notificări
+Email Service: Trimitere email-uri
+Push Notification Service: Notificări browser/mobile
+Chat Integration: Telegram, Discord, etc.
+1.2.8 Monitoring & Logging Layer
+Centralized Logging: Agregare și analiză loguri
+Metrics Collection: Colectare metrici aplicație
+Alerting Service: Alertare proactivă
+Health Check Service: Monitorizare disponibilitate
+2. Structura Avansată a Codului
+2.1 Structura folderelor Backend (Python + FastAPI)
+backend/
+├── app/                           # Cod aplicație
+│   ├── api/                       # API endpoints
+│   │   ├── v1/                    # API versiunea 1
+│   │   │   ├── endpoints/         # Grupare pe resurse
+│   │   │   │   ├── auth.py
+│   │   │   │   ├── signals.py
+│   │   │   │   ├── users.py
+│   │   │   │   └── ...
+│   │   │   ├── dependencies.py    # Dependențe shared
+│   │   │   └── router.py          # Router principal v1
+│   │   ├── v2/                    # Versiuni viitoare API
+│   │   └── api.py                 # Agregare toate versiuni
+│   ├── core/                      # Nucleul aplicației
+│   │   ├── config.py              # Configurări aplicație
+│   │   ├── security.py            # JWT, criptare, etc
+│   │   ├── exceptions.py          # Excepții personalizate
+│   │   └── logging.py             # Setup logging
+│   ├── db/                        # Acces baze de date
+│   │   ├── base.py                # Setup db principal
+│   │   ├── repositories/          # Acces date (repository pattern)
+│   │   │   ├── base.py            # Repository abstract
+│   │   │   ├── signals.py 
+│   │   │   └── users.py
+│   │   ├── migrations/            # Alembic migrations
+│   │   │   ├── env.py
+│   │   │   ├── script.py.mako
+│   │   │   └── versions/          # Fișiere migrație
+│   │   └── session.py             # Session management
+│   ├── models/                    # Modele SQLAlchemy
+│   │   ├── base.py                # Model de bază
+│   │   ├── user.py
+│   │   ├── signal.py
+│   │   ├── market_data.py
+│   │   └── ...
+│   ├── schemas/                   # Modele Pydantic
+│   │   ├── base.py                # Schema de bază
+│   │   ├── auth.py
+│   │   ├── user.py
+│   │   ├── signal.py
+│   │   └── ...
+│   ├── services/                  # Logica de business
+│   │   ├── auth.py
+│   │   ├── signals.py
+│   │   ├── users.py
+│   │   └── ...
+│   ├── tasks/                     # Task-uri asincrone
+│   │   ├── worker.py              # Setări worker
+│   │   ├── market_data.py         # Import date
+│   │   ├── signal_generation.py   # Generare semnale
+│   │   └── notifications.py       # Trimitere notificări
+│   ├── utils/                     # Utilități
+│   │   ├── constants.py
+│   │   ├── helpers.py
+│   │   └── validators.py
+│   └── main.py                    # Punct intrare aplicație
+├── ai/                            # Module AI (separate)
+│   ├── models/                    # Implementări modele
+│   │   ├── base.py                # Clasă model de bază
+│   │   ├── random_forest.py
+│   │   ├── lstm.py
+│   │   └── ...
+│   ├── features/                  # Feature engineering
+│   │   ├── technical_indicators.py
+│   │   ├── preprocessor.py
+│   │   └── ...
+│   ├── training/                  # Antrenare modele
+│   │   ├── trainer.py
+│   │   ├── hyperparameter_tuning.py
+│   │   └── ...
+│   ├── evaluation/                # Evaluare modele
+│   │   ├── metrics.py
+│   │   ├── backtesting.py
+│   │   └── ...
+│   ├── inference/                 # Inferență modele
+│   │   ├── predictor.py
+│   │   ├── signal_generator.py
+│   │   └── ...
+│   └── registry/                  # Stocare și versionare modele
+│       ├── model_registry.py
+│       └── versioning.py
+├── config/                        # Configurări
+│   ├── settings.py                # Setări aplicație
+│   ├── environments/              # Configurări specifice mediului
+│   │   ├── base.json
+│   │   ├── development.json
+│   │   ├── staging.json
+│   │   └── production.json
+│   └── logging_config.json        # Configurare logging
+├── scripts/                       # Scripturi utilitare
+│   ├── seed_db.py
+│   ├── generate_test_data.py
+│   └── ...
+├── tests/                         # Teste
+│   ├── conftest.py
+│   ├── unit/                      # Teste unitare
+│   │   ├── api/
+│   │   ├── services/
+│   │   └── ...
+│   ├── integration/               # Teste integrare
+│   │   ├── api/
+│   │   ├── db/
+│   │   └── ...
+│   └── e2e/                       # Teste end-to-end
+├── docs/                          # Documentație
+│   ├── architecture/
+│   ├── api/
+│   └── development/
+├── docker/                        # Fișiere Docker
+│   ├── Dockerfile.api
+│   ├── Dockerfile.worker
+│   ├── Dockerfile.ai
+│   └── ...
+├── deployment/                    # Configurări deployment
+│   ├── kubernetes/
+│   ├── terraform/
+│   └── ...
+├── pyproject.toml                 # Dependențe și build
+├── alembic.ini                    # Configurare Alembic
+└── README.md
+2.2 Structura folderelor Frontend (React + Tailwind)
+frontend/
+├── public/                        # Fișiere statice
+├── src/
+│   ├── assets/                    # Resurse
+│   │   ├── images/
+│   │   ├── styles/                # Stiluri globale
+│   │   └── fonts/
+│   ├── components/                # Componente React
+│   │   ├── common/                # Componente comune
+│   │   │   ├── Button/
+│   │   │   ├── Input/
+│   │   │   └── ...
+│   │   ├── layout/                # Componente layout
+│   │   │   ├── Header/
+│   │   │   ├── Sidebar/
+│   │   │   └── ...
+│   │   ├── features/              # Organizate pe feature
+│   │   │   ├── auth/
+│   │   │   ├── signals/
+│   │   │   ├── charts/
+│   │   │   └── ...
+│   │   └── modals/                # Dialoguri modale
+│   ├── config/                    # Configurări frontend
+│   │   ├── api.js                 # Configurare API
+│   │   ├── routes.js              # Definire rute
+│   │   └── constants.js           # Constante aplicație
+│   ├── contexts/                  # React Context
+│   │   ├── AuthContext.js
+│   │   ├── ThemeContext.js
+│   │   └── ...
+│   ├── hooks/                     # Custom hooks
+│   │   ├── useAuth.js
+│   │   ├── useSignals.js
+│   │   └── ...
+│   ├── lib/                       # Librării și utilități
+│   │   ├── api.js                 # Client API
+│   │   ├── socket.js              # Configurare WebSocket
+│   │   ├── storage.js             # Local storage utils
+│   │   └── ...
+│   ├── pages/                     # Pagini aplicație
+│   │   ├── Dashboard/
+│   │   ├── SignalList/
+│   │   ├── SignalDetails/
+│   │   ├── Profile/
+│   │   └── ...
+│   ├── services/                  # Servicii comunicare API
+│   │   ├── auth.service.js
+│   │   ├── signals.service.js
+│   │   ├── users.service.js
+│   │   └── ...
+│   ├── store/                     # State management (Redux)
+│   │   ├── actions/
+│   │   ├── reducers/
+│   │   ├── selectors/
+│   │   ├── middlewares/
+│   │   └── store.js
+│   ├── types/                     # Type definitions
+│   │   ├── user.types.js
+│   │   ├── signal.types.js
+│   │   └── ...
+│   ├── utils/                     # Funcții utilitare
+│   │   ├── format.js              # Formatare date
+│   │   ├── validators.js          # Validare formulare
+│   │   └── ...
+│   ├── App.jsx                    # Componenta principală
+│   ├── index.jsx                  # Punct de intrare
+│   └── routes.jsx                 # Configurare routing
+├── .eslintrc.js                   # Configurare ESLint
+├── tailwind.config.js             # Configurare Tailwind
+├── jest.config.js                 # Configurare teste
+├── package.json
+└── README.md
+2.3 Convenții de cod
+Python (Backend)
+Stilul de cod: PEP 8, verificat cu flake8/black
+Docstrings: Format Google Python Style Guide
+Typing: Folosirea type hints pentru toate funcțiile
+Imports: Grupate (stdlib, third-party, local) și alfabetic
+Naming: snake_case pentru variabile și funcții, CamelCase pentru clase
+JavaScript/TypeScript (Frontend)
+Stilul de cod: Airbnb JavaScript Style Guide
+Componente: Fișiere separate pentru componente
+Naming: camelCase pentru variabile/funcții, PascalCase pentru componente/clase
+Imports: Absolute imports din src/ folosind aliases
+Tipuri: TypeScript pentru type safety
+3. Management de Configurare, Logging și Medii
+3.1 Management de configurare
+Utilizarea Pydantic pentru configurare
+Copy# backend/app/core/config.py
+from pydantic import BaseSettings, Field, validator
+from typing import Optional, Dict, Any, List
+import json
+import os
+
+class Settings(BaseSettings):
+    # Aplicație
+    APP_NAME: str = "Forex AI Platform"
+    APP_VERSION: str = "1.0.0"
+    DEBUG: bool = False
+    
+    # API
+    API_PREFIX: str = "/api"
+    API_V1_STR: str = "/v1"
+    
+    # Server
+    SERVER_HOST: str = "0.0.0.0"
+    SERVER_PORT: int = 8000
+    
+    # Database
+    DB_ENGINE: str = Field(..., env="DB_ENGINE")
+    DB_USERNAME: str = Field(..., env="DB_USERNAME")
+    DB_PASSWORD: str = Field(..., env="DB_PASSWORD")
+    DB_HOST: str = Field(..., env="DB_HOST")
+    DB_PORT: int = Field(..., env="DB_PORT")
+    DB_NAME: str = Field(..., env="DB_NAME")
+    
+    # Redis
+    REDIS_HOST: str = Field(..., env="REDIS_HOST")
+    REDIS_PORT: int = Field(..., env="REDIS_PORT")
+    
+    # JWT
+    JWT_SECRET_KEY: str = Field(..., env="JWT_SECRET_KEY")
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    
+    # Celery
+    CELERY_BROKER_URL: str = Field(..., env="CELERY_BROKER_URL")
+    CELERY_RESULT_BACKEND: str = Field(..., env="CELERY_RESULT_BACKEND")
+    
+    # Market data
+    MARKET_DATA_SOURCES: List[Dict[str, Any]] = []
+    
+    # Notification
+    SMTP_SERVER: str = Field(..., env="SMTP_SERVER")
+    SMTP_PORT: int = Field(..., env="SMTP_PORT")
+    SMTP_USERNAME: str = Field(..., env="SMTP_USERNAME")
+    SMTP_PASSWORD: str = Field(..., env="SMTP_PASSWORD")
+    
+    # Environment
+    ENVIRONMENT: str = Field("development", env="ENVIRONMENT")
+    
+    # Configurare extra specifică mediului
+    EXTRA_CONFIG: Dict[str, Any] = {}
+    
+    @validator("EXTRA_CONFIG", pre=True)
+    def load_extra_config(cls, v, values):
+        env = values.get("ENVIRONMENT", "development")
+        config_path = f"config/environments/{env}.json"
+        
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                return json.load(f)
+        return {}
+    
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+
+settings = Settings()
+3.2 Configurare pentru diferite medii
+Fișiere de mediu (.env)
+# .env.development
+ENVIRONMENT=development
+DB_ENGINE=postgresql
+DB_USERNAME=dev_user
+DB_PASSWORD=dev_password
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=forex_ai_dev
+...
+
+# .env.production
+ENVIRONMENT=production
+DB_ENGINE=postgresql
+DB_USERNAME=prod_user
+DB_PASSWORD=prod_secure_password
+DB_HOST=db.production.example.com
+DB_PORT=5432
+DB_NAME=forex_ai_prod
+...
+Configurări specifice mediului (JSON)
+Copy// config/environments/development.json
+{
+  "cors": {
+    "origins": ["http://localhost:3000"],
+    "allow_credentials": true
+  },
+  "rate_limiting": {
+    "enabled": false
+  },
+  "logging": {
+    "level": "DEBUG"
+  }
+}
+
+// config/environments/production.json
+{
+  "cors": {
+    "origins": ["https://app.yourplatform.com"],
+    "allow_credentials": true
+  },
+  "rate_limiting": {
+    "enabled": true,
+    "requests_per_minute": 60
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}
+3.3 Logging configurabil
+Configurare logging
+Copy# backend/app/core/logging.py
+import logging
+import logging.config
+import json
+import os
+from ..core.config import settings
+
+def setup_logging():
+    log_level = settings.EXTRA_CONFIG.get("logging", {}).get("level", "INFO")
+    
+    log_config_path = "config/logging_config.json"
+    if os.path.exists(log_config_path):
+        with open(log_config_path, "r") as f:
+            config = json.load(f)
+            
+        # Override level from environment settings
+        for handler in config.get("handlers", {}).values():
+            handler["level"] = log_level
+            
+        for logger in config.get("loggers", {}).values():
+            logger["level"] = log_level
+            
+        logging.config.dictConfig(config)
+    else:
+        # Fallback basic configuration
+        logging.basicConfig(
+            level=getattr(logging, log_level),
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
+    
+    logging.info(f"Logging initialized with level {log_level} for environment {settings.ENVIRONMENT}")
+Configurare logging JSON
+Copy// config/logging_config.json
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "default": {
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    },
+    "json": {
+      "class": "pythonjsonlogger.jsonlogger.JsonFormatter",
+      "format": "%(asctime)s %(name)s %(levelname)s %(message)s"
+    }
+  },
+  "handlers": {
+    "console": {
+      "class": "logging.StreamHandler",
+      "level": "INFO",
+      "formatter": "default",
+      "stream": "ext://sys.stdout"
+    },
+    "file": {
+      "class": "logging.handlers.RotatingFileHandler",
+      "level": "INFO",
+      "formatter": "json",
+      "filename": "logs/app.log",
+      "maxBytes": 10485760,
+      "backupCount": 5
+    }
+  },
+  "loggers": {
+    "app": {
+      "level": "INFO",
+      "handlers": ["console", "file"],
+      "propagate": false
+    },
+    "uvicorn": {
+      "level": "INFO",
+      "handlers": ["console", "file"],
+      "propagate": false
+    },
+    "sqlalchemy": {
+      "level": "WARNING",
+      "handlers": ["console", "file"],
+      "propagate": false
+    }
+  },
+  "root": {
+    "level": "INFO",
+    "handlers": ["console", "file"]
+  }
+}
+4. Model de Bază de Date Extensibil
+4.1 Design relațional al bazei de date
+Copy# backend/app/models/base.py
+import uuid
+from sqlalchemy import Column, DateTime, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.ext.declarative import declarative_base, declared_attr
+from datetime import datetime
+
+class CustomBase:
+    @declared_attr
+    def __tablename__(cls):
+        return cls.__name__.lower()
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+Base = declarative_base(cls=CustomBase)
+4.2 Modele principale
+Copy# backend/app/models/user.py
+from sqlalchemy import Column, String, Boolean, Enum, ForeignKey, Integer, Table
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import relationship
+from .base import Base
+import enum
+
+class UserRole(str, enum.Enum):
+    ADMIN = "admin"
+    MANAGER = "manager"
+    USER = "user"
+
+class User(Base):
+    email = Column(String, unique=True, index=True, nullable=False)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=False)
+    role = Column(Enum(UserRole), default=UserRole.USER)
+    
+    # Relații
+    profile = relationship("UserProfile", uselist=False, back_populates="user")
+    preferences = relationship("UserPreferences", uselist=False, back_populates="user")
+    subscriptions = relationship("Subscription", back_populates="user")
+
+class UserProfile(Base):
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="CASCADE"), unique=True)
+    first_name = Column(String)
+    last_name = Column(String)
+    phone_number = Column(String)
+    time_zone = Column(String)
+    
+    user = relationship("User", back_populates="profile")
+
+class UserPreferences(Base):
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id", ondelete="CASCADE"), unique=True)
+    notification_settings = Column(JSONB, default={})
+    ui_settings = Column(JSONB, default={})
+    preferred_pairs = Column(JSONB, default=[])
+    preferred_timeframes = Column(JSONB, default=[])
+    
+    user = relationship("User", back_populates="preferences")
+
+# backend/app/models/market_data.py
+from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, UniqueConstraint, Index
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+from .base import Base
+
+class CurrencyPair(Base):
+    symbol = Column(String, unique=True, nullable=False)
+    base_currency = Column(String, nullable=False)
+    quote_currency = Column(String, nullable=False)
+    description = Column(String)
+    is_active = Column(Boolean, default=True)
+    
+    # Relații
+    ohlc_data = relationship("OHLCData", back_populates="pair")
+    signals = relationship("Signal", back_populates="pair")
+
+class Timeframe(Base):
+    name = Column(String, unique=True, nullable=False)  # 1m, 5m, 15m, 1h, 4h, 1d
+    minutes = Column(Integer, nullable=False)  # Conversie în minute
+    
+    # Relații
+    ohlc_data = relationship("OHLCData", back_populates="timeframe")
+    signals = relationship("Signal", back_populates="timeframe")
+
+class OHLCData(Base):
+    pair_id = Column(UUID(as_uuid=True), ForeignKey("currencypair.id"), nullable=False)
+    timeframe_id = Column(UUID(as_uuid=True), ForeignKey("timeframe.id"), nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=False)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float)
+    
+    # Relații
+    pair = relationship("CurrencyPair", back_populates="ohlc_data")
+    timeframe = relationship("Timeframe", back_populates="ohlc_data")
+    
+    # Constrângeri pentru performanță
+    __table_args__ = (
+        UniqueConstraint("pair_id", "timeframe_id", "timestamp"),
+        Index("idx_ohlc_pair_timeframe_timestamp", "pair_id", "timeframe_id", "timestamp")
+    )
+
+# backend/app/models/signal.py
+from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Enum, JSON, Text
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship
+import enum
+from .base import Base
+
+class SignalType(str, enum.Enum):
+    BUY = "buy"
+    SELL = "sell"
+    NEUTRAL = "neutral"
+
+class SignalStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    INVALIDATED = "invalidated"
+
+class Signal(Base):
+    pair_id = Column(UUID(as_uuid=True), ForeignKey("currencypair.id"), nullable=False)
+    timeframe_id = Column(UUID(as_uuid=True), ForeignKey("timeframe.id"), nullable=False)
+    model_id = Column(UUID(as_uuid=True), ForeignKey("aimodel.id"), nullable=False)
+    signal_type = Column(Enum(SignalType), nullable=False)
+    status = Column(Enum(SignalStatus), default=SignalStatus.PENDING)
+    strength = Column(Float)  # 0.0 - 1.0
+    timestamp = Column(DateTime(timezone=True), nullable=False)
+    entry_price = Column(Float)
+    stop_loss = Column(Float)
+    take_profit = Column(Float)
+    expiration_time = Column(DateTime(timezone=True))
+    technical_indicators = Column(JSONB)
+    notes = Column(Text)
+    performance_metrics = Column(JSONB)
+    
+    # Relații
+    pair = relationship("CurrencyPair", back_populates="signals")
+    timeframe = relationship("Timeframe", back_populates="signals")
+    model = relationship("AIModel", back_populates="signals")
+    signal_events = relationship("SignalEvent", back_populates="signal")
+
+class SignalEvent(Base):
+    signal_id = Column(UUID(as_uuid=True), ForeignKey("signal.id"), nullable=False)
+    event_type = Column(String, nullable=False)  # triggered, modified, closed, etc.
+    timestamp = Column(DateTime(timezone=True), nullable=False)
+    price = Column(Float)
+    details = Column(JSONB)
+    
+    # Relații
+    signal = relationship("Signal", back_populates="signal_events")
+
+# backend/app/models/ai_model.py
+from sqlalchemy import Column, String, Float, DateTime, Boolean, Text, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship
+from .base import Base
+
+class AIModel(Base):
+    name = Column(String, nullable=False)
+    version = Column(String, nullable=False)
+    type = Column(String, nullable=False)  # RandomForest, LSTM, etc.
+    description = Column(Text)
+    parameters = Column(JSONB)
+    features = Column(JSONB)
+    metrics = Column(JSONB)
+    is_active = Column(Boolean, default=False)
+    trained_at = Column(DateTime(timezone=True))
+    
+    # Path to saved model
+    model_path = Column(String)
+    
+    # Relații
+    signals = relationship("Signal", back_populates="model")
+    training_runs = relationship("ModelTrainingRun", back_populates="model")
+
+class ModelTrainingRun(Base):
+    model_id = Column(UUID(as_uuid=True), ForeignKey("aimodel.id"), nullable=False)
+    start_time = Column(DateTime(timezone=True))
+    end_time = Column(DateTime(timezone=True))
+    parameters = Column(JSONB)
+    metrics = Column(JSONB)
+    status = Column(String)  # running, completed, failed
+    logs = Column(Text)
+    
+    # Relații
+    model = relationship("AIModel", back_populates="training_runs")
+
+# backend/app/models/subscription.py
+from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Enum, Boolean
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship
+import enum
+from .base import Base
+
+class PlanType(str, enum.Enum):
+    FREE = "free"
+    BASIC = "basic"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
+
+class PaymentStatus(str, enum.Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    REFUNDED = "refunded"
+
+class SubscriptionPlan(Base):
+    name = Column(String, nullable=False)
+    type = Column(Enum(PlanType), nullable=False)
+    price = Column(Float, nullable=False)
+    currency = Column(String, default="USD")
+    billing_cycle = Column(String)  # monthly, yearly
+    features = Column(JSONB)
+    is_active = Column(Boolean, default=True)
+    
+    # Relații
+    subscriptions = relationship("Subscription", back_populates="plan")
+
+class Subscription(Base):
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("subscriptionplan.id"), nullable=False)
+    start_date = Column(DateTime(timezone=True), nullable=False)
+    end_date = Column(DateTime(timezone=True))
+    is_active = Column(Boolean, default=True)
+    auto_renew = Column(Boolean, default=True)
+    
+    # Relații
+    user = relationship("User", back_populates="subscriptions")
+    plan = relationship("SubscriptionPlan", back_populates="subscriptions")
+    payments = relationship("Payment", back_populates="subscription")
+
+class Payment(Base):
+    subscription_
